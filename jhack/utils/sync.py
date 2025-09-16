@@ -53,7 +53,7 @@ def watch(
     if initial_sync:
         # todo: should we allow syncing the venv as well?
         print(f"beginning initial sync {' (venv *NOT* included)' if venv else ''}...")
-        on_change(watch_list, False)
+        on_change(watch_list, None)
         print("remote up to speed with local. Starting watcher...")
 
     print("\nwatching: \n\t%s" % "\n\t".join(map(str, watch_list)))
@@ -92,13 +92,13 @@ def watch(
         # determine which files have changed
         changed_files = (file for file in watch_list if _check_changed(file))
         if changed_files:
-            on_change(changed_files, False)
+            on_change(changed_files, None)
 
         if venv:
             # determine which local python packages have changed
             changed_python_packages = (file for file in venv_list if _check_changed(file))
             if changed_python_packages:
-                on_change(changed_python_packages, True)
+                on_change(changed_python_packages, venv)
 
         elapsed = time.time() - start_time
         if not has_logged_first_elapsed:
@@ -206,7 +206,7 @@ def _sync(
                     push_to_remote_juju_unit(
                         file,
                         remote_root=remote_root,
-                        is_venv=False,
+                        venv_path=None,
                         model=model,
                         remote_venv_root=remote_venv_root,
                         unit=unit,
@@ -219,7 +219,7 @@ def _sync(
         loop.run_until_complete(asyncio.gather(*coros))
         print("Initial sync done.")
 
-    def on_change(changed_files: typing.Iterable[typing.Union[str, Path]], is_venv: bool = False):
+    def on_change(changed_files: typing.Iterable[typing.Union[str, Path]], venv_path: Optional[Path] = None):
         loop = asyncio.events.get_event_loop()
         loop.run_until_complete(
             asyncio.gather(
@@ -227,7 +227,7 @@ def _sync(
                     push_to_remote_juju_unit(
                         changed,
                         remote_root=remote_root,
-                        is_venv=is_venv,
+                        venv_path=venv_path,
                         remote_venv_root=remote_venv_root,
                         unit=unit,
                         model=model,
@@ -379,7 +379,7 @@ def sync(
 async def push_to_remote_juju_unit(
     file: Path,
     remote_root: str,
-    is_venv: bool,
+    venv_path: Optional[Path],
     remote_venv_root: str,
     unit: str,
     container_name: str,
@@ -389,10 +389,9 @@ async def push_to_remote_juju_unit(
     app, _, unit_id = unit.rpartition("/")
 
     # if the file is in the venv:
-    if is_venv:
-        abspath = str(file.absolute())
+    if venv_path:
         try:
-            pkg_path = abspath.split("/site-packages/")[1]
+            pkg_path = file.absolute().relative_to(venv_path)
         except IndexError:
             # TODO: how robust is this heuristic?
             logger.error(
@@ -401,7 +400,7 @@ async def push_to_remote_juju_unit(
             )
             return
 
-        remote_file_path = (remote_venv_root + pkg_path).format(unit_id=unit_id, app=app)
+        remote_file_path = str(Path(remote_venv_root.format(unit_id=unit_id, app=app)) /  pkg_path)
     else:
         remote_file_path = (remote_root + str(file.absolute())[len(os.getcwd()) + 1 :]).format(
             unit_id=unit_id, app=app
